@@ -174,20 +174,6 @@ pipeline {
             }
         }
 
-        stage("Clone infrastructure repo") {
-            steps {
-                dir("${workspacePath}/infra") {
-                    retry(2) {
-                        git(
-                            credentialsId: 'git',
-                            url: "ssh://mikewhiting.co/var/git/org/infra",
-                            branch: "master"
-                        )
-                    }
-                }
-            }
-        }
-
         stage("Main build") {
             steps {
                 dir("${workspacePath}/project") {

@@ -153,17 +153,6 @@ pipeline {
                 echo "${initDB}"
             }
         }
-        stage("Clone infrastructure repo") {
-            steps {
-                dir("${basePath}/infra") {
-                    git (
-         	            credentialsId: 'git',
-                        url: "ssh://mikewhiting.co/var/git/org/infra",
-                        branch: "master"
-                    )
-                }
-            }
-        }
         stage("Main build") {
             steps {
                 dir("${basePath}/project") {

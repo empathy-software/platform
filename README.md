@@ -6,6 +6,8 @@ The application being built is not in this repo. The pipeline clones it into `pr
 
 `base-docker` is the host bootstrap (proxy, test machine, AWS). Jobs should not clone it.
 
+This repository is licensed under the MIT License. See [LICENSE](LICENSE).
+
 
 ## Layout
 
@@ -31,12 +33,10 @@ infra/                   Playbooks, inventories, vault, Galaxy deps
   prod/                  Inventory and vhost for the production host
 ```
 
-Ansible's `playbook_dir` is `infra/` (the directory that contains `deploy.yml`). From there, `../env/` is this repo's compose template and `../project/` is the cloned app. That only works when this repo is the workspace root and `infra/` is this tree, not a second checkout dropped on top of it.
+Ansible's `playbook_dir` is `infra/` (the directory that contains `deploy.yml`). From there, `../env/` is this repo's compose template and `../project/` is the cloned app. The Jenkins job SCM is this repository, so `infra/test` and `infra/prod` are already in the workspace. The pipelines do not clone a separate infra repository.
 
 
 ## What a test build does
-
-`Jenkinsfile`, `Jenkinsfile.prod`, and `v2/Jenkinsfile` still have a "Clone infrastructure repo" stage that checks out `ssh://mikewhiting.co/var/git/org/infra` into `infra/`. That replaces the `infra/` directory in this repo for the rest of the job. Remove that stage once this repo is the job SCM, or the playbooks, vault, and inventories committed here are not the ones that run.
 
 `Jenkinsfile` (and `v2/Jenkinsfile`):
 

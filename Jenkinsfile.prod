@@ -105,17 +105,6 @@ pipeline {
                 }
             }
         }
-        stage("Clone infrastructure repo") {
-            steps {
-                dir("${basePath}/infra") {
-                    git (
-                        credentialsId: 'git',
-                        url: "ssh://mikewhiting.co/var/git/org/infra",
-                        branch: "master"
-                    )
-                }
-            }
-        }
         stage("Backup") {
             when {
                 allOf {

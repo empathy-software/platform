@@ -1,0 +1,573 @@
+def jsonEscape(String s) {
+    if (s == null) {
+        return ""
+    }
+    return s
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\b", "\\b")
+        .replace("\f", "\\f")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+}
+
+def linesToJsonArray(String text) {
+    if (text == null || text.trim().isEmpty()) {
+        return "[]"
+    }
+
+    def items = []
+    for (def line : text.readLines()) {
+        def trimmed = line.trim()
+        if (!trimmed.isEmpty()) {
+            items << "\"${jsonEscape(trimmed)}\""
+        }
+    }
+
+    return "[" + items.join(", ") + "]"
+}
+
+def workspacePath = ""
+def repo = ""
+def repoUrl = ""
+def buildString = ""
+def branchId = ""
+def url = ""
+def branch = ""
+def jobName = env.JOB_NAME
+def jobBaseName = "${jobName}".split('/').last()
+def backup = false
+def restore = false
+def subRepo = false
+def subRepoRepo = ""
+def subRepoBranch = ""
+def initDB = false
+def noWWW = false
+def liveURL = ""
+def liveURL2 = ""
+def restart = "[]"
+def rebuild = "[]"
+def appContainer = "v8"
+def gitSha = ""
+def shortSha = ""
+
+pipeline {
+    agent any
+
+    environment {
+        ENVIRONMENT = 'test'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    stages {
+        stage("Preflight network check") {
+            steps {
+                sh """
+                    set -eu
+                    echo "Checking DNS..."
+                    getent hosts mikewhiting.co
+
+                    echo "Checking SSH connectivity..."
+                    ssh -o BatchMode=yes -o ConnectTimeout=5 git@mikewhiting.co exit || true
+                """
+            }
+        }
+
+        stage("Init") {
+            steps {
+                script {
+                    workspacePath = pwd()
+
+                    if (params.appContainer != null) {
+                        appContainer = params.appContainer
+                    }
+
+                    if (params.branch != null) {
+                        branch = params.branch.trim()
+                    }
+
+                    if (params.repo != null) {
+                        repo = params.repo.trim()
+                    }
+
+                    if (params.url != null) {
+                        url = params.url.trim()
+                    }
+
+                    if (params.buildString != null) {
+                        buildString = params.buildString.trim()
+                    }
+
+                    if (params.backup != null) {
+                        backup = params.backup
+                    }
+
+                    if (params.restore != null) {
+                        restore = params.restore
+                    }
+
+                    if (params.subRepo != null) {
+                        subRepo = params.subRepo
+                    }
+
+                    if (params.subRepoRepo != null) {
+                        subRepoRepo = params.subRepoRepo.trim()
+                    }
+
+                    if (params.subRepoBranch != null) {
+                        subRepoBranch = params.subRepoBranch.trim()
+                    }
+
+                    if (params.noWWW != null) {
+                        noWWW = params.noWWW
+                    }
+
+                    if (params.restartContainers != null) {
+                        restart = linesToJsonArray(params.restartContainers)
+                    }
+
+                    if (params.rebuildContainers != null) {
+                        rebuild = linesToJsonArray(params.rebuildContainers)
+                    }
+
+                    if (!repo) {
+                        error('Parameter "repo" is required')
+                    }
+
+                    if (!branch) {
+                        error('Parameter "branch" is required')
+                    }
+
+                    if (!url) {
+                        error('Parameter "url" is required')
+                    }
+
+                    repoUrl = (repo ==~ /^(https?:\/\/|git@|ssh:\/\/).*/) ? repo : "ssh://mikewhiting.co/var/git/${repo}"
+
+                    if (!noWWW) {
+                        liveURL = "www.${url}"
+                        liveURL2 = url
+                    } else {
+                        liveURL = url
+                        liveURL2 = ""
+                    }
+
+                    branchId = sh(
+                        script: "printf %s '${url}' | md5sum | awk '{print \$1}'",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "workspacePath=${workspacePath}"
+                    echo "repoUrl=${repoUrl}"
+                    echo "branch=${branch}"
+                    echo "branchId=${branchId}"
+                    echo "liveURL=${liveURL}"
+                    echo "liveURL2=${liveURL2}"
+                    echo "restart=${restart}"
+                    echo "rebuild=${rebuild}"
+                }
+            }
+        }
+
+        stage("Clone infrastructure repo") {
+            steps {
+                dir("${workspacePath}/infra") {
+                    retry(2) {
+                        git(
+                            credentialsId: 'git',
+                            url: "ssh://mikewhiting.co/var/git/org/infra",
+                            branch: "master"
+                        )
+                    }
+                }
+            }
+        }
+
+        stage("Main build") {
+            steps {
+                dir("${workspacePath}/project") {
+                    retry(2) {
+                        git(
+                            credentialsId: 'git',
+                            url: repoUrl,
+                            branch: branch
+                        )
+                    }
+
+                    script {
+                        gitSha = sh(
+                            script: "git rev-parse HEAD",
+                            returnStdout: true
+                        ).trim()
+
+                        shortSha = sh(
+                            script: "git rev-parse --short HEAD",
+                            returnStdout: true
+                        ).trim()
+
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} ${shortSha}"
+                        echo "gitSha=${gitSha}"
+                    }
+                }
+            }
+        }
+
+        stage("Sub Repo") {
+            when {
+                expression { subRepo == true }
+            }
+            steps {
+                dir("${workspacePath}/project/sub") {
+                    retry(2) {
+                        git(
+                            credentialsId: 'git',
+                            url: (subRepoRepo ==~ /^(https?:\/\/|git@|ssh:\/\/).*/) ? subRepoRepo : "ssh://mikewhiting.co/var/git/${subRepoRepo}",
+                            branch: subRepoBranch
+                        )
+                    }
+                }
+            }
+        }
+
+        stage("Determine initDB") {
+            steps {
+                script {
+                    initDB = !fileExists("${workspacePath}/project/vendor")
+                    echo "initDB=${initDB}"
+                }
+            }
+        }
+
+        stage("Backup") {
+            when {
+                expression { backup == true }
+            }
+            steps {
+                dir("${workspacePath}") {
+                    sh "perl ./backup.pm ${jobBaseName} ${url} save"
+                }
+            }
+        }
+
+        stage("Restore") {
+            when {
+                expression { restore == true }
+            }
+            steps {
+                dir("${workspacePath}") {
+                    sh "perl ./backup.pm ${jobBaseName} ${url} restore"
+                }
+            }
+        }
+
+        stage("Builds deploy to test") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                dir("${workspacePath}/infra/test") {
+                    script {
+                        def extraVarsJson = """{
+  "app_container": "${jsonEscape(appContainer ?: '')}",
+  "url": "${jsonEscape(liveURL ?: '')}",
+  "url2": "${jsonEscape(liveURL2 ?: '')}",
+  "branch_type": "",
+  "build_type": "",
+  "branch_id": "${jsonEscape(branchId ?: '')}",
+  "rebuild": ${rebuild ?: '[]'},
+  "workspace": "${jsonEscape(workspacePath ?: '')}"
+}
+"""
+                        writeFile file: 'extra_vars.json', text: extraVarsJson
+                        echo extraVarsJson
+                    }
+
+                    withCredentials([file(credentialsId: 'site-passfile', variable: 'VAULT_PASS_FILE')]) {
+                        sh '''
+                            set -eu
+                            chmod 400 "$VAULT_PASS_FILE"
+                            ansible-playbook ../deploy.yml \
+                              --extra-vars @extra_vars.json \
+                              --vault-password-file "$VAULT_PASS_FILE"
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage("Compile simple") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                    expression { buildString.isEmpty() }
+                }
+            }
+            steps {
+                sh "docker exec -u www-data app-${branchId} ant"
+            }
+        }
+
+        stage("Compile param") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                    expression { !buildString.isEmpty() }
+                }
+            }
+            steps {
+                sh "docker exec -u www-data app-${branchId} ant -DbuildString ${buildString}"
+            }
+        }
+
+        stage("Restart containers") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                    expression { restart != '[]' }
+                }
+            }
+            steps {
+                dir("${workspacePath}/infra/test") {
+                    script {
+                        def restartVarsJson = """{
+  "workspace": "${jsonEscape(workspacePath ?: '')}",
+  "variable_host": "control",
+  "branch_type": "",
+  "build_type": "",
+  "restart": ${restart ?: '[]'}
+}
+"""
+                        writeFile file: 'restart_vars.json', text: restartVarsJson
+                        echo restartVarsJson
+                    }
+
+                    sh '''
+                        set -eu
+                        ENVIRONMENT=test ansible-playbook ../deploy-restart.yml \
+                          --extra-vars @restart_vars.json
+                    '''
+                }
+            }
+        }
+
+        stage("Configure") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_docroot /var/www/project"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_webroot ${liveURL}"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_publicdir \"\""
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --misc tpl_cache"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_dbserver db-${branchId}"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_dbuser root"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_dbpass example"
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --set_dbname project"
+            }
+        }
+
+        stage("Init db data") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                    expression { initDB == true }
+                }
+            }
+            steps {
+                sh "docker exec -u www-data app-${branchId} php ./vendor/bin/empathy --mysql populate"
+            }
+        }
+
+        stage("Package release artifact") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                dir("${workspacePath}") {
+                    script {
+                        if (!gitSha?.trim()) {
+                            error("gitSha is empty; cannot package release")
+                        }
+
+                        def builtAtUtc = sh(
+                            script: "date -u +%Y-%m-%dT%H:%M:%SZ",
+                            returnStdout: true
+                        ).trim()
+
+                        def releaseJson = """{
+                          "git_sha": "${gitSha}",
+                          "short_sha": "${shortSha}",
+                          "build_number": "${env.BUILD_NUMBER}",
+                          "job_name": "${env.JOB_NAME}",
+                          "build_url": "${env.BUILD_URL ?: ''}",
+                          "branch": "${branch}",
+                          "repo": "${repo}",
+                          "built_at_utc": "${builtAtUtc}"
+                        }
+                        """
+                        writeFile file: "${workspacePath}/RELEASE.json", text: releaseJson
+
+                        sh """
+                            set -eu
+                            mkdir -p build
+
+                            cp RELEASE.json project/RELEASE.json
+
+                            tar -C project -czf build/project-${gitSha}.tar.gz .
+                            sha256sum build/project-${gitSha}.tar.gz > build/project-${gitSha}.sha256
+
+                            printf '%s\n' '${gitSha}' > build/GIT_SHA
+                            printf '%s\n' '${shortSha}' > build/GIT_SHA_SHORT
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("Install test release") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                script {
+                    sh """
+                        set -eu
+                        release_root="${workspacePath}/releases/${gitSha}"
+                        mkdir -p "\$release_root"
+                        tar -C "\$release_root" -xzf "${workspacePath}/build/project-${gitSha}.tar.gz"
+                    """
+                }
+            }
+        }
+
+        stage("Cleanup old releases") {
+            steps {
+                sh """
+                    set -eu
+                    cd ${workspacePath}/releases
+
+                    ls -1dt */ | tail -n +4 | xargs -r rm -rf
+                """
+            }
+        }
+
+        stage("Activate release") {
+            when {
+                allOf {
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                dir("${workspacePath}") {
+                    sh """
+                        set -eu
+                        rm -f current
+                        ln -s "releases/${gitSha}" current
+                        ls -l current
+                        readlink current
+                    """
+                }
+            }
+        }
+
+        stage("Deploy") {
+                    when {
+                        allOf {
+                            expression { backup == false }
+                            expression { restore == false }
+                        }
+                    }
+                    steps {
+                        dir("${workspacePath}/infra/test") {
+                            script {
+                                def extraVarsJson = """{
+          "app_container": "${jsonEscape(appContainer ?: '')}",
+          "url": "${jsonEscape(liveURL ?: '')}",
+          "url2": "${jsonEscape(liveURL2 ?: '')}",
+          "branch_type": "",
+          "build_type": "",
+          "branch_id": "${jsonEscape(branchId ?: '')}",
+          "rebuild": ${rebuild ?: '[]'},
+          "workspace": "${jsonEscape(workspacePath ?: '')}",
+          "deploy_active": "true"
+        }
+        """
+                                writeFile file: 'extra_vars.json', text: extraVarsJson
+                                echo extraVarsJson
+                            }
+
+                            withCredentials([file(credentialsId: 'site-passfile', variable: 'VAULT_PASS_FILE')]) {
+                                sh '''
+                                    set -eu
+                                    chmod 400 "$VAULT_PASS_FILE"
+                                    ansible-playbook ../deploy.yml \
+                                      --extra-vars @extra_vars.json \
+                                      --vault-password-file "$VAULT_PASS_FILE"
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage("Restart deployed containers") {
+                    when {
+                        allOf {
+                            expression { backup == false }
+                            expression { restore == false }
+                            expression { restart != '[]' }
+                        }
+                    }
+                    steps {
+                        dir("${workspacePath}/infra/test") {
+                            script {
+                                def restartVarsJson = """{
+          "workspace": "${jsonEscape(workspacePath ?: '')}",
+          "variable_host": "control",
+          "branch_type": "",
+          "build_type": "",
+          "deploy_active": "true",
+          "restart": ${restart ?: '[]'}
+        }
+        """
+                                writeFile file: 'restart_vars.json', text: restartVarsJson
+                                echo restartVarsJson
+                            }
+
+                            sh '''
+                                set -eu
+                                ENVIRONMENT=test ansible-playbook ../deploy.yml \
+                                  --extra-vars @restart_vars.json
+                            '''
+                        }
+                    }
+                }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'build/*, RELEASE.json', allowEmptyArchive: true
+        }
+    }
+}

@@ -1,0 +1,59 @@
+
+
+- name: extract branch id
+  set_fact:
+    extracted_branch_id: "{{ (project_branch is defined) | ternary(project_branch, '') | regex_search('^UNI-([0-9]+)-', '\\1') }}"
+- name: set branch id
+  set_fact:
+    branch_id: "{% if extracted_branch_id is iterable and extracted_branch_id is not string %}{{ extracted_branch_id | first  }}{% else %}0{% endif %}"
+
+- name: inspect jenkins container
+  docker_container_info:
+    name: jenkins-jenkins
+  register: jenkins_output
+- name: get docker volume source path
+  set_fact:
+    volume_path: "{{ item.Source }}"
+  with_items: "{{ jenkins_output.container.Mounts }}"
+  when: item.Destination == "/var/jenkins_home"
+
+- name: get jenkins build dir
+  set_fact:
+    build_dir: "{{ playbook_dir.split('/')[-3] }}"
+
+- name: fix "build dir" when PR build (build occurs in sub-directory)
+  set_fact:
+    build_dir: "{{ playbook_dir.split('/')[-3] }}/{{ build_dir }}"
+  when: branch_type == "pr"
+
+- name: "debug"
+  debug:
+    var: volume_path
+- name: "debug"
+  debug:
+    var: build_dir
+- name: "debug"
+  debug:
+    var: build_type_dir
+
+- name: set host project path
+  set_fact:
+    host_project_path: >-
+      {{
+        (workspace | regex_replace('^/var/jenkins_home', volume_path))
+        ~ '/'
+        ~ ((deploy | default(false) | bool) | ternary('current', 'project'))
+      }}
+
+- name: set build path
+  set_fact:
+    build_path: >-
+      {{
+        (workspace)
+        ~ '/'
+        ~ ((deploy | default(false) | bool) | ternary('current', 'project'))
+      }}
+
+- name: "debug"
+  debug:
+    var: host_project_path

@@ -1,0 +1,118 @@
+---
+
+# partials!
+- hosts: control
+  vars:
+    deploy: "{{ deploy_active | default(false) | bool }}"
+    project_dir: >-
+      {{
+        (playbook_dir)
+        ~ '/../'
+        ~ ((deploy is defined and deploy) | ternary('current', 'project'))
+      }}
+    env: "{{ (lookup('env', 'ENVIRONMENT') != '') | ternary(lookup('env', 'ENVIRONMENT'), my_env) }}"
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+    app_container_tag: "{{ app_container is defined | ternary(app_container, 'v8') }}"
+    use_arch: "{{ 'pi' if (ansible_architecture == 'aarch64' or ansible_architecture == 'arm64') else '' }}"
+  gather_facts: yes
+  tasks:
+    - name: set partial text
+      set_fact:
+        partial_text: ""
+    - name: set partial filename
+      set_fact:
+        partial: "docker-compose.partial.yml"
+    - name: set compose files array
+      set_fact:
+        compose_files:
+          - docker-compose.yml  
+    - name: set vars
+      include_tasks: "{{ playbook_dir }}/deploy_vars.yml"
+    - name: detect services partial
+      stat:
+        path: "{{ project_dir }}/env/docker-partial.j2"
+      register: st
+    - name: output stat
+      debug:
+        var: st
+    - name: populate docker-compose partial
+      template:
+        src: "{{ project_dir }}/env/docker-partial.j2"
+        dest: "{{ playbook_dir }}/..{{ build_type_dir}}/{{ partial }}"
+      when: st.stat.exists == true
+    - name: add override file to compose_files when enabled
+      when: st.stat.exists
+      set_fact:
+        compose_files: "{{ compose_files + [ partial ] }}"
+
+- hosts: control
+  gather_facts: yes
+  vars:
+    deploy: "{{ deploy_active | default(false) | bool }}"
+    project_dir: >-
+      {{
+        (playbook_dir)
+        ~ '/../'
+        ~ ((deploy is defined and deploy) | ternary('current', 'project'))
+      }}
+    secrets_file: "/var/jenkins_home/site_secrets.yml"
+    env: "{{ (lookup('env', 'ENVIRONMENT') != '') | ternary(lookup('env', 'ENVIRONMENT'), my_env) }}"
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+    # partial_file: "{{ project_dir }}/env/{{ partial }}"
+    # partial_text: "{{ lookup('file', partial_file, lstrip=false, rstrip=false, errors='ignore') }}"
+    app_container_tag: "{{ app_container is defined | ternary(app_container, 'v8') }}"
+    use_arch: "{{ 'pi' if (ansible_architecture == 'aarch64' or ansible_architecture == 'arm64') else '' }}"
+    
+  tasks:
+    - name: output env
+      debug:
+        var: env
+    - name: read encrypted values
+      include_vars:
+        file: "{{ playbook_dir }}/encrypted"
+        name: vault_vals
+    - name: set vars
+      include_tasks: "{{ playbook_dir }}/deploy_vars.yml"
+    - name: insert docker-compose file
+      template:
+        src: "{{ playbook_dir }}/..{{ build_type_dir}}/env/docker-compose.yml.j2"
+        dest: "{{ playbook_dir }}/..{{ build_type_dir}}/docker-compose.yml"
+#    - name: insert vhost file
+#      template:
+#        src: "{{playbook_dir}}/test/vhost.j2"
+#        dest: "/var/vhost.d/{{ url }}.conf"
+#      when: url2
+    - name: log into docker registry
+      docker_login:
+        registry: https://registry.gitlab.com
+        username: "{{ docker_registry_user }}"
+        # gitlab personal access token (which can read registry) due to expire 01/12/2020!
+        password: "{{ docker_registry_token }}"
+        reauthorize: yes
+        # make result of login available to 'vagrant' user
+        config_path: ~/.docker/config.json
+    - name: create mongodb data dir
+      file:
+        path: "{{ playbook_dir }}/..{{ build_type_dir}}/db"
+        state: directory
+
+    - name: inject site secrets
+      include_tasks: "{{ playbook_dir }}/deploy-site-secrets.yml"
+
+    - name: check if env file exists
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/.env"
+      register: env_file 
+
+    - name: run the service
+      community.docker.docker_compose_v2:
+        project_src: "{{ playbook_dir }}/..{{ build_type_dir }}"
+        recreate: auto
+        build: always
+        services: "{{ (rebuild | length > 0) | ternary(rebuild, omit) }}"
+        env_files: "{{ env_file.stat.exists | ternary([project_dir ~ '/.env'], omit) }}"
+        files: "{{ compose_files }}"
+...
+

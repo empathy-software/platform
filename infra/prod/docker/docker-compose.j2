@@ -1,0 +1,34 @@
+---
+networks:
+  default:
+    external:
+      name: nginx-proxy
+services:
+  nginx-proxy:
+    volumes:
+    - "/home/{{ ansible_user }}/nginx-certs:/etc/nginx/certs"
+    - "/var/run/docker.sock:/tmp/docker.sock:ro"
+    - "/home/{{ ansible_user }}/vhost.d:/etc/nginx/vhost.d"
+    image: "jwilder/nginx-proxy"
+    container_name: "nginx-proxy"
+    ports:
+    - "80:80"
+    - "443:443"
+
+{% if env == "build" %}
+  dd-agent:
+    container_name: dd-agent
+    environment:
+      - DD_API_KEY={{ dd_agent_key }}
+      - DD_SITE=datadoghq.eu
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_AC_EXCLUDE="name:dd-agent"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+    image: gcr.io/datadoghq/agent:7
+
+{% endif %}
+...

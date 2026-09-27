@@ -1,0 +1,345 @@
+---
+
+
+# - hosts: engywook
+#   vars: 
+#     env: "test"
+#     docker_path: "/home/admin/docker"
+#   tasks:
+#     - name: docker base
+#       block:
+#         - name: create docker directory
+#           file:
+#             path: "/home/admin/docker"
+#             state: directory
+#         - name: create vhosts dir
+#           file:
+#             path: "/home/admin/vhosts.d"
+#             state: directory
+#         - name: create vhosts dir
+#           file:
+#             path: "/home/admin/nginx-certs"
+#             state: directory
+
+#         - name: insert docker-compose file
+#           template:
+#             src: "{{ playbook_dir }}/prod/docker/docker-compose.j2"
+#             dest: "{{ docker_path }}/docker-compose.yml" 
+
+#         - name: Create a network
+#           docker_network:
+#             name: nginx-proxy
+
+#         - name: run the service
+#           community.docker.docker_compose_v2:
+#             project_src: "{{ docker_path }}"
+#             recreate: never
+#       when: not backup|bool and not restore|bool      
+
+
+- hosts: control
+  become: false
+  vars:
+    project: "{{ project_name }}"
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+  tasks:   
+    - name: vars
+      include_tasks: "{{ playbook_dir }}/deploy_vars.yml" 
+    - name: set paths
+      set_fact:      
+        project_src: "/var/jenkins_home/jobs/{{ project }}/workspace"
+        remote_project_path: "{{ (host_project_path | replace('/home/mike', '/home/admin') | replace('/home/vagrant', '/home/admin') | replace('/home/mearp', '/home/admin') | replace('.live', '')) }}"
+        
+    - name: set paths 2
+      set_fact:
+        remote_workspace_path: "{{ remote_project_path ~ '/..' }}"     
+    - name: "debug"
+      debug:
+        var: remote_project_path
+
+
+
+# - hosts: engywook
+#   become: true
+#   roles: 
+#     - geerlingguy.docker
+#     - geerlingguy.certbot
+#   tasks:
+#     - name: install awscli
+#       ansible.builtin.apt:
+#         name: awscli 
+#         state: present   
+#     - name: install certbot apache plugin
+#       ansible.builtin.apt:
+#         name: python3-certbot-apache 
+#         state: present
+#     - name: install perl datetime
+#       ansible.builtin.apt:
+#         name: libdatetime-perl 
+#         state: present
+#     - name: install unzip
+#       ansible.builtin.apt:
+#         name: unzip 
+#         state: present    
+
+
+
+# # partials!
+# - hosts: control
+#   vars: 
+#     env: "test"
+#   tasks:
+#     - name: set path
+#       set_fact:
+#         host_project_path: "{{ remote_project_path }}"
+#     - name: detect services partial
+#       stat:
+#         path: "{{ project_src }}/project/env/docker-partial.j2"
+#       register: st
+#     - name: output stat
+#       debug:
+#         var: st
+#     - name: populate docker-compose partial
+#       template:
+#         src: "{{ project_src }}/project/env/docker-partial.j2"
+#         dest: "{{ playbook_dir }}/../docker-compose.partial.yml"
+#       when: st.stat.exists == true
+
+
+
+# partials!
+- hosts: engywook
+  vars:
+    env: "{{ (lookup('env', 'ENVIRONMENT') != '') | ternary(lookup('env', 'ENVIRONMENT'), my_env) }}"
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+    app_container_tag: "{{ app_container is defined | ternary(app_container, 'v8') }}"
+    use_arch: "{{ 'pi' if (ansible_architecture == 'aarch64' or ansible_architecture == 'arm64') else '' }}"
+    host_project_path: "{{ hostvars['control']['remote_project_path'] }}"
+    host_workspace_path: "{{ hostvars['control']['remote_workspace_path'] }}"
+    project_dir: "{{ hostvars['control']['workspace'] | replace('.live', '') }}/project"
+    build_path: "{{ host_project_path }}"
+  gather_facts: yes
+  tasks:
+    - name: create directory
+      file:
+        path: "{{ host_project_path }}"
+        state: directory
+    - name: set partial text
+      set_fact:
+        partial_text: ""
+    - name: set partial filename
+      set_fact:
+        partial: "docker-compose.partial.yml"
+    - name: set compose files array
+      set_fact:
+        compose_files:
+          - docker-compose.yml
+
+    - name: debug partial path
+      debug:
+        msg: "{{ project_dir }}/env/docker-partial.j2"   
+    - name: detect services partial
+      stat:
+        path: "{{ project_dir }}/env/docker-partial.j2"
+      register: st
+      delegate_to: control
+      run_once: true
+    - name: output stat
+      debug:
+        var: st
+    - name: populate docker-compose partial
+      template:
+        src: "{{ project_dir }}/env/docker-partial.j2"
+        dest: "{{ host_workspace_path }}/{{ partial }}"
+      when: st.stat.exists == true
+    - name: add override file to compose_files when enabled
+      when: st.stat.exists
+      set_fact:
+        compose_files: "{{ compose_files + [ partial ] }}"
+
+
+- hosts: engywook
+  become: false
+  vars:
+    project_dir: "{{ playbook_dir }}/../project"
+    env: "{{ (lookup('env', 'ENVIRONMENT') != '') | ternary(lookup('env', 'ENVIRONMENT'), my_env) }}"
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+    jenkins: ""
+    project: "{{ project_name }}"
+    project_src: "{{ hostvars['control']['project_src'] }}"
+    host_project_path: "{{ hostvars['control']['remote_project_path'] }}"
+    host_workspace_path: "{{ hostvars['control']['remote_workspace_path'] }}"
+    #partial_file: "{{ playbook_dir }}/../docker-compose.partial.yml"
+    #partial_text: "{{ lookup('file', partial_file, lstrip=false, rstrip=false, errors='ignore') }}"
+    partial_text: ""
+    app_container_tag: "{{ app_container is defined | ternary(app_container, 'v8') }}"
+    smarty_path: "{{ (app_container_tag == 'php84') | ternary('Smarty/libs/Smarty.class.php', 'Smarty/Smarty.class.php') }}"
+    use_arch: "{{ 'pi' if (ansible_architecture == 'aarch64' or ansible_architecture == 'arm64') else '' }}"
+  gather_facts: yes
+  tasks:
+    - name: deploy app
+      block:
+        - name: adding admin user to docker group
+          user:
+            name: admin
+            groups: docker
+            append: yes
+        - name: debug
+          debug:
+            var: something
+          vars:
+            something:
+              srcVar: "{{ project_src }}/project"
+              destVar: "{{ host_workspace_path }}/"
+
+        - name: "sync file"
+          synchronize:
+            src: "{{ project_src }}/project/"
+            dest: "{{ host_project_path }}/"
+            recursive: true
+            rsync_opts:
+              - "--exclude=.git"
+              - "--exclude=/public_html/js/common.js"
+              - "--exclude=/public_html/.htaccess"
+              - "--exclude=/public_html/uploads"
+              - "--exclude=/vendor/candy-chat/xmpp-prebind-php/lib/XmppPrebind.php"
+              - "--exclude=/dump.sql"
+              - "--exclude=/config.yml"
+              - "--exclude=/.env"
+              - "--exclude=.next"
+              - "--exclude=node_modules" 
+
+        - name: "remove config"
+          file:
+            path: "{{ host_project_path }}/config.yml"
+            state: absent
+
+        - name: "remove htaccess"
+          file:
+            path: "{{ host_project_path }}/public_html/.htaccess"
+            state: absent
+
+        - name: read encrypted values
+          include_vars:
+            file: "{{ playbook_dir }}/encrypted"
+            name: vault_vals    
+
+        - name: log into docker registry
+          docker_login:
+            registry: https://registry.gitlab.com
+            username: "{{ docker_registry_user }}"
+            # gitlab personal access token (which can read registry) due to expire 01/12/2020!
+            password: "{{ docker_registry_token }}"
+            reauthorize: yes
+            # make result of login available to 'vagrant' user
+            config_path: ~/.docker/config.json
+
+        - name: insert docker-compose file
+          template:
+            src: "{{ playbook_dir }}/..{{ build_type_dir}}/env/docker-compose.yml.j2"
+            dest: "{{ host_workspace_path }}/docker-compose.yml"
+
+        - name: parse rebuild list
+          set_fact:
+            rebuild_list: "{{ (rebuild | default('[]')) | from_json }}"
+
+        - name: check if env file exists
+          ansible.builtin.stat:
+            path: "{{ host_project_path }}/.env"
+          register: env_file     
+
+        - debug:
+            var: env_file
+
+        - name: run the service
+          community.docker.docker_compose_v2:
+            project_src: "{{ host_workspace_path }}"
+            build: always
+            recreate: auto
+            services: "{{ (rebuild_list | length > 0) | ternary(rebuild_list, omit) }}"
+            env_files: "{{ env_file.stat.exists | ternary([host_project_path ~ '/.env'], omit) }}"
+            files: "{{ compose_files }}"
+
+        - name: "set web root"
+          command:
+            cmd: "docker exec -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --set_webroot {{ (url2 != '') | ternary(url2, url) }}"
+
+        # - name: "set db host"
+        #   command:
+        #     cmd: "docker exec -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --set_dbserver db-{{ branch_id }}" 
+
+        - name: "set db host"
+          command:
+            cmd: "docker exec -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --set_dbserver mysql" 
+
+        - name: set smarty ssl plugin
+          set_fact:
+            json:
+              name: SmartySSL
+              config: '{"force": true}'
+              version: 1.0
+              class_path: "{{ smarty_path }}"
+              class_name: \Smarty
+              loader:
+        
+        - name: assert ssl plugin
+          command: "docker exec -i -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --assert_plugin '{{ json | to_json }}'"
+
+        - name: clear cache
+          command: "docker exec -i -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --clear_cache"    
+
+
+        # - name: "populate db"
+        #   command:
+        #     cmd: "docker exec -u www-data app-{{ branch_id }} php ./vendor/bin/empathy --mysql populate"
+
+      when: not backup|bool and not restore|bool
+
+
+- hosts: engywook
+  become: false
+  vars:
+    host_workspace_path: "{{ hostvars['control']['remote_workspace_path'] }}"
+  tasks:
+    - name: sync backup script
+      block:
+        - name: "sync file"
+          synchronize:
+            src: "{{ base_path }}/backup.pm"
+            dest: "{{ host_workspace_path }}"  
+            recursive: true         
+      when: backup|bool or restore|bool
+
+
+- hosts: engywook
+  become: false
+  vars:
+    host_workspace_path: "{{ hostvars['control']['remote_workspace_path'] }}"
+    debug_str: "perl ./backup.pm {{ project_name }} {{ url }} save"
+  tasks:
+    - name: debug
+      debug:
+        var: debug_str
+    - name: backup
+      command:
+        cmd: "perl ./backup.pm {{ project_name }} {{ url }} save"
+        chdir: "{{ host_workspace_path }}" 
+      when: backup|bool
+
+- hosts: engywook
+  become: false
+  vars:
+    host_project_path: "{{ hostvars['control']['remote_workspace_path'] }}"
+  tasks:
+    - name: restore
+      command:
+        chdir: "{{ host_workspace_path }}"
+        cmd: "perl ./backup.pm {{ project_name }} {{ url }} restore"
+      when: restore|bool
+
+
+...
+

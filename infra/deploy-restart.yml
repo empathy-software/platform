@@ -1,0 +1,79 @@
+---
+- hosts: control
+  become: false
+  vars:
+    branch_type: ""
+    build_type_dir: "{{ (build_type == 'fe') | ternary('/server', '') }}"
+    deploy: ((deploy_active is defined and deploy_active) | ternary(true, false))
+  tasks:
+    - name: vars
+      include_tasks: "{{ playbook_dir }}/deploy_vars.yml"
+
+    - name: set paths
+      set_fact:
+        remote_project_path: "{{ host_project_path | replace('/home/mike', '/home/admin') | replace('/home/vagrant', '/home/admin') | replace('/home/mearp', '/home/admin') | replace('.live', '') }}"
+
+    - name: set paths 2
+      set_fact:
+        remote_workspace_path: "{{ remote_project_path ~ '/..' }}"         
+
+
+- hosts: "{{ variable_host | default('empty_group') }}"
+  gather_facts: no
+  vars:
+    project_src: "{{ (variable_host == 'control') | ternary(playbook_dir + '/..', hostvars['control']['remote_workspace_path']) }}"
+    deploy: ((deploy_active is defined and deploy_active) | ternary(true, false))
+  tasks:
+    - name: set partial text
+      set_fact:
+        partial_text: ""
+
+    - name: set partial filename
+      set_fact:
+        partial: "docker-compose.partial.yml"
+
+    - name: set compose files array
+      set_fact:
+        compose_files:
+          - docker-compose.yml
+
+    - name: detect services partial
+      stat:
+        path: "{{ project_src }}/{{ partial }}"
+      register: st
+
+    - name: add override file to compose_files when enabled
+      when: st.stat.exists
+      set_fact:
+        compose_files: "{{ compose_files + [ partial ] }}"
+
+    - name: debug
+      debug:
+        var: project_src
+
+    - name: check if env file exists
+      ansible.builtin.stat:
+        path: "{{ project_src }}/project/.env"
+      register: env_file
+
+    - name: normalize restart services
+      set_fact:
+        restart_services: >-
+          {{
+            []
+            if restart is not defined or restart in [none, '']
+            else ((restart | from_json) if (restart | type_debug) == 'str' else restart)
+          }}
+
+    - name: debug restart services
+      debug:
+        var: restart_services
+
+    - name: restart containers
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_src }}"
+        services: "{{ restart_services }}"
+        recreate: always
+        env_files: "{{ env_file.stat.exists | ternary([project_src ~ '/project/.env'], omit) }}"
+        files: "{{ compose_files }}"
+...

@@ -1,0 +1,5 @@
+
+control ansible_user=jenkins
+engywook ansible_user=admin
+
+

@@ -1,0 +1,172 @@
+
+
+def basePath = ""
+def url = ""
+def jobName = env.JOB_NAME
+def jobBaseName = "${jobName}".split('/').last()
+def projectName = "${jobBaseName}".split('\\.').first()
+def backup = ""
+def restore = ""
+def noWWW = false
+def liveURL = ""
+def liveURL2 = ""
+def deployCmd = ""
+def doBackup = false
+def doRestore = false
+def restart = "'[]'"
+def rebuild = "'[]'"
+def appContainer = "v8"
+def workspace = ""
+
+
+if (params.appContainer != null) {
+    appContainer = params.appContainer
+}
+
+if (params.restartContainers != null) {
+    def content = params.restartContainers.readLines().collect{"\\\"${it}\\\""}.join(', ');
+    restart = "'[${ content }]'"
+}
+if (params.rebuildContainers != null) {
+    def content = params.rebuildContainers.readLines().collect{"\\\"${it}\\\""}.join(', ');
+    rebuild = "'[${ content }]'"
+}
+if (params.url != null) {
+    url = params.url
+}
+
+if (params.backup != null) {
+    backup = params.backup
+}
+
+if (params.restore != null) {
+    restore = params.restore
+}
+
+if (params.noWWW != null) {
+    noWWW = params.noWWW
+}
+
+
+pipeline {
+    agent any
+    stages {
+        stage("Assign workspace") {
+            steps {
+                script {
+                    workspace = pwd()
+                    echo "${workspace}"
+                }
+
+            }
+        }
+        stage("determine www") {
+            steps {
+                script {
+                    if (!noWWW) {
+                        liveURL = "${url}"
+                        liveURL2 = "www.${url}"
+                    } else {
+                        liveURL = "${url}"
+                    }
+                }
+            }
+        }
+        stage("Echo live url") {
+            steps {
+                echo "${liveURL}"
+            }
+        }
+        stage("Echo job name") {
+            steps {
+                echo "${jobName}"
+            }
+        }
+        stage("Echo project name") {
+            steps {
+                echo "${projectName}"
+            }
+        }
+        stage("BB build started") {
+            steps {
+                // get base path
+                script {
+                    basePath = sh (
+                        script: "pwd",
+                        returnStdout: true
+                    ).trim()
+                }
+                // get branch id
+                script {
+                    branchId = sh (
+                        script: 'printf %s ' + url + ' | md5sum | awk \'{print $1}\'',
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        stage("Clone infrastructure repo") {
+            steps {
+                dir("${basePath}/infra") {
+                    git (
+                        credentialsId: 'git',
+                        url: "ssh://mikewhiting.co/var/git/org/infra",
+                        branch: "master"
+                    )
+                }
+            }
+        }
+        stage("Backup") {
+            when {
+                allOf {
+                    expression { backup == true }
+                }
+            }
+            steps {
+                script {
+                    doBackup = true
+                }
+            }
+        }
+        stage("Restore") {
+            when {
+                allOf {
+                    expression { restore == true }
+                }
+            }
+            steps {
+                script {
+                    doRestore = true
+                }
+            }
+        }
+        stage("Deploy to 'test' without using branch id") {
+            steps {
+                script {
+                    // hard-code branch_type to fix sub-dirs
+                    deployCmd = "ENVIRONMENT=test ansible-playbook ../deploy-prod.yml -e \"url=${liveURL} url2=${liveURL2} branch_type= build_type= app_container=${appContainer} branch_id=${branchId} project_name=${projectName} backup=${doBackup} restore=${doRestore} base_path=${basePath} rebuild=${rebuild} workspace=${workspace}\""
+                    echo "${deployCmd}"
+                }
+                dir("${basePath}/infra/prod") {
+                    
+                    sh "${deployCmd}"
+                }
+            }
+        }
+        stage("restart containers") {
+            when {
+                allOf {
+                    expression { restart != "[]" }
+                    expression { restart != "'[]'" }
+                    expression { backup == false }
+                    expression { restore == false }
+                }
+            }
+            steps {
+                dir("${basePath}/infra/prod") {
+                    sh "ENVIRONMENT=test ansible-playbook ../deploy-restart.yml -e \"variable_host=engywook branch_type= build_type= restart=${restart} workspace=${workspace}\""
+                }
+            }
+        }
+    }
+}

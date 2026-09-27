@@ -1,0 +1,78 @@
+#jinja2: trim_blocks:False
+
+{% set local_env = (env == "dev") | ternary('dev.', 'test.')  %}
+{% set branch = (env == "dev") | ternary('', ((branch_id | int == 0) | ternary('master.', branch_type + '-' + branch_id + '.'))) %}
+{% set stack_id = (env == "test" and ((branch_id) != '' )) | ternary('-' + branch_id, '') %}
+
+name: {{ url }}
+services:
+  app:
+    container_name: app{{ stack_id }}
+    image: registry.gitlab.com/mikejw/empathy/app-php-{% if env == "dev" %}dev{% elif env == "test" %}test-wnode{% else %}prod{% endif %}:{{ app_container_tag }}
+    environment:
+    - VIRTUAL_HOST={{ url }}{% if url2 != "" %},{{ url2 }}{% endif %}
+    - VIRTUAL_PORT=80
+    volumes:
+    - {% if env == "dev" %}/home/vagrant/files/project{% else %}{{ host_project_path }}{% endif %}:/var/www/project:cached
+    - "/etc/localtime:/etc/localtime:ro"
+{% if env == "dev" %}
+    - /home/vagrant/.ssh/id_rsa.pub:/home/www-data/.ssh/authorized_keys:cached
+    - /home/vagrant/.ssh/id_rsa:/home/www-data/.ssh/id_rsa:cached
+    - /home/vagrant/.ssh/id_rsa.pub:/home/www-data/.ssh/id_rsa.pub:cached
+    - /home/vagrant/.ssh/known_hosts:/home/www-data/.ssh/known_hosts:cached
+    ports:
+    - 2020:2222
+{% endif %}
+
+  cache:
+    container_name: cache{{ stack_id }}
+    image: memcached:1.6.10
+    volumes:
+    - "/etc/localtime:/etc/localtime:ro"
+
+#  db:
+#    container_name: db{{ stack_id }}
+#    image: mysql:8.4.4
+#    volumes:
+#    - {% if env == "dev" %}/home/vagrant/db{% else %}{{ host_project_path }}/db-logs/log{% endif %}:/var/log/mysql
+#    - "/etc/timezone:/etc/timezone:ro"
+#    - "/etc/localtime:/etc/localtime:ro"
+#    restart: unless-stopped
+#    environment:
+#      - MYSQL_DATABASE=project
+#      - MYSQL_ROOT_PASSWORD=example
+
+{{ partial_text }}
+
+{% if env == "dev" %}
+  node:
+    container_name: fe
+    image: registry.gitlab.com/gigabyte-software/unicorn/fe-node:latest
+    volumes:
+      - /home/vagrant/files/fe:/home/node
+    environment:
+      - VIRTUAL_HOST=fe.dev.unicorn.gigabyte.software
+      - VIRTUAL_PORT=3000
+      - NODE_ENV=development
+    command: >
+      /bin/bash -c "
+        echo \"0.0.0.0    fe.dev.unicorn.gigabyte.software\" >> /etc/hosts
+        yarn install --no-bin-links
+        yarn start
+      "
+  proxy:
+    image: jwilder/nginx-proxy
+    container_name: proxy
+    ports:
+    - 80:80
+    volumes:
+    - /var/run/docker.sock:/tmp/docker.sock:ro
+
+{% else %}
+
+networks:
+  default:
+    external:
+      name: nginx-proxy
+
+{% endif %}

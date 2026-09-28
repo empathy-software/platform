@@ -23,12 +23,9 @@ infra/                   Playbooks, inventories, vault, Galaxy deps
   deploy-restart.yml     Restart selected compose services
   deploy-site-secrets.yml
   deploy_vars.yml
-  boot.yml               Provision a build host (Docker, certbot)
-  playbook.yml           Local Vagrant path, not the Jenkins job
   encrypted              Ansible vault (AES256)
-  requirements.yml       Galaxy pin: community.docker 5.3.0, geerlingguy roles
+  requirements.yml       Galaxy pin: community.docker 5.3.0
   collections/           community.docker, loaded from beside the playbooks
-  roles/                 geerlingguy.docker and geerlingguy.certbot, used by boot.yml
   test/                  Inventory and vhost for the Jenkins test/build host
   prod/                  Inventory and vhost for the production host
 ```
@@ -62,5 +59,3 @@ Ansible's `playbook_dir` is `infra/` (the directory that contains `deploy.yml`).
 ```bash
 ansible-galaxy collection install -r infra/requirements.yml --force
 ```
-
-`boot.yml` applies `geerlingguy.docker` and `geerlingguy.certbot` from `infra/roles/`. The Jenkins deploy jobs do not run `boot.yml`.
